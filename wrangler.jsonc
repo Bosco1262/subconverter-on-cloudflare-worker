@@ -1,0 +1,14 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "subconverter-worker",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-08-22",
+  "compatibility_flags": ["nodejs_compat"],
+  "vars": {
+    "API_MODE": "true",
+    "API_TOKEN": "",
+    "MANAGED_PREFIX": "",
+    "MAX_NODES": "500",
+    "MAX_RULESET_LINES": "20000"
+  }
+}

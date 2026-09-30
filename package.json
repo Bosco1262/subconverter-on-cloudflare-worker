@@ -1,0 +1,33 @@
+{
+  "name": "subconverter-worker",
+  "version": "1.0.0",
+  "description": "subconverter ported to Cloudflare Workers (TypeScript rewrite)",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "sync-base": "tsx scripts/sync-base.ts"
+  },
+  "dependencies": {
+    "smol-toml": "^1.9.0",
+    "yaml": "^2.9.1"
+  },
+  "devDependencies": {
+    "@cloudflare/vitest-pool-workers": "^0.22.0",
+    "@cloudflare/workers-types": "^5.20260924.1",
+    "@types/node": "^26.6.2",
+    "tsx": "^4.23.15",
+    "typescript": "^7.0.2",
+    "vitest": "^4.1.11",
+    "wrangler": "^4.138.0"
+  },
+  "allowScripts": {
+    "esbuild@0.28.1": true,
+    "workerd@1.20260815.1": true,
+    "workerd@1.20260921.1": true
+  }
+}
