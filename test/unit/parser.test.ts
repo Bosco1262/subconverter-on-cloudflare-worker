@@ -1,4 +1,4 @@
-﻿import { describe, expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 import { newProxy, Proxy, ProxyType } from "../../src/core/proxy";
 import { explode, explodeSub } from "../../src/core/parser";
 
@@ -223,5 +223,33 @@ VM1 = vmess, 5.6.7.8, 443, username=b831381d-6324-4d53-ad4f-8cda48b30811, tls=tr
     expect(nodes[0].Type).toBe(ProxyType.Shadowsocks);
     expect(nodes[1].Type).toBe(ProxyType.Trojan);
     expect(nodes[1].ServerName).toBe("s.example.com");
+  });
+
+  // Upstream parity (subparser.cpp:3504): the "normal subscription" branch runs the whole body
+  // through urlSafeBase64Decode() first. That decoder copies non-base64 bytes verbatim but resets
+  // its 4-char group at each one, so plain-text links (no base64 wrapper) get their base64-alphabet
+  // runs decoded into binary garbage. Airports always ship a base64 payload, which is why this is
+  // harmless in practice — these cases pin the behaviour so it is not "fixed" by accident.
+  it("plain text ss:// links lose their password to the lenient base64 pass", () => {
+    const nodes: Proxy[] = [];
+    explodeSub("ss://YWVzLTI1Ni1nY206cHcx@1.2.3.4:8388", nodes);
+    // the base64 run "YWVzLTI1Ni1nY206cHcx" decodes to "aes-256-gcm:pw1", so the host/port survive
+    // but the password is corrupt and the node is dropped as invalid
+    expect(nodes.length).toBe(0);
+  });
+
+  it("plain text multi-line ss:// subscription yields nothing", () => {
+    const nodes: Proxy[] = [];
+    explodeSub("ss://YWVzLTI1Ni1nY206cHcx@1.2.3.4:8388\nss://YWVzLTI1Ni1nY206cHcx@5.6.7.8:8388", nodes);
+    expect(nodes.length).toBe(0);
+  });
+
+  it("the same links work when the subscription is base64 encoded", () => {
+    const links = ["ss://YWVzLTI1Ni1nY206cHcx@1.2.3.4:8388", "ss://YWVzLTI1Ni1nY206cHcx@5.6.7.8:8388"];
+    const nodes: Proxy[] = [];
+    explodeSub(Buffer.from(links.join("\n"), "utf8").toString("base64"), nodes);
+    expect(nodes.length).toBe(2);
+    expect(nodes[0].Password).toBe("pw1");
+    expect(nodes[1].Hostname).toBe("5.6.7.8");
   });
 });

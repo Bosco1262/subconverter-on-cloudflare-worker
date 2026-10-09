@@ -4,7 +4,7 @@ import { subconverter, type SubRequest } from "./core/orchestrator";
 import { getRulesetHandler, surgeConfToClashHandler, getProfileHandler, renderTemplateHandler } from "./routes/handlers";
 import {
   versionHandler, refreshRulesHandler, readConfHandler, updateConfHandler, flushCacheHandler,
-  getUrlHandler, getLocalHandler, VERSION,
+  getUrlHandler, getLocalHandler, setEnvOverrideApplier, VERSION,
 } from "./routes/routes";
 import { readConf, global } from "./core/settings";
 import { setTemplateFileGet } from "./core/template";
@@ -66,9 +66,24 @@ function jsonResp(status: number, body: string, headers?: Headers | [string, str
 }
 
 let confLoaded = false;
+// captured once so env overrides survive a /readconf or /updateconf reload
+let bootEnv: Env | null = null;
+
+/** Re-apply env-var overrides on top of whatever pref just loaded (mirrors loadConfigOnce). */
+function applyEnvOverrides(): void {
+  const env = bootEnv;
+  if (!env) return;
+  if (env.API_MODE !== undefined) global.apiMode = env.API_MODE === "true";
+  if (env.API_TOKEN !== undefined && env.API_TOKEN.length > 0) global.accessToken = env.API_TOKEN;
+  if (env.MANAGED_PREFIX !== undefined && env.MANAGED_PREFIX.length > 0) global.managedConfigPrefix = env.MANAGED_PREFIX;
+  if (env.MAX_NODES !== undefined) global.maxAllowedNodes = Number(env.MAX_NODES) || 0;
+  if (env.MAX_RULESET_LINES !== undefined) global.maxAllowedRules = Number(env.MAX_RULESET_LINES) || 0;
+}
 
 async function loadConfigOnce(env: Env): Promise<void> {
   if (confLoaded) return;
+  bootEnv = env;
+  setEnvOverrideApplier(applyEnvOverrides);
   if (env.KV) {
     setKvBinding(
       (key) => env.KV!.get(key),
@@ -88,11 +103,7 @@ async function loadConfigOnce(env: Env): Promise<void> {
   }
   await readConf();
   // env vars override pref
-  if (env.API_MODE !== undefined) global.apiMode = env.API_MODE === "true";
-  if (env.API_TOKEN !== undefined && env.API_TOKEN.length > 0) global.accessToken = env.API_TOKEN;
-  if (env.MANAGED_PREFIX !== undefined && env.MANAGED_PREFIX.length > 0) global.managedConfigPrefix = env.MANAGED_PREFIX;
-  if (env.MAX_NODES !== undefined) global.maxAllowedNodes = Number(env.MAX_NODES) || 0;
-  if (env.MAX_RULESET_LINES !== undefined) global.maxAllowedRules = Number(env.MAX_RULESET_LINES) || 0;
+  applyEnvOverrides();
   confLoaded = true;
 }
 

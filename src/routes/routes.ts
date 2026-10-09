@@ -13,6 +13,13 @@ export { subconverter };
 
 export const VERSION = "1.0.0-worker";
 
+/** Env-var overrides survive a /readconf or /updateconf reload (index.ts installs the applier). */
+let applyEnvOverrides: (() => void) | null = null;
+
+export function setEnvOverrideApplier(fn: () => void): void {
+  applyEnvOverrides = fn;
+}
+
 export function versionHandler(): SubResultLite {
   return { status: 200, body: `subconverter ${VERSION} backend\n` };
 }
@@ -30,6 +37,9 @@ export async function refreshRulesHandler(): Promise<SubResultLite> {
 
 export async function readConfHandler(): Promise<SubResultLite> {
   const ok = await readConf();
+  // readConf() reloads pref and overwrites API_MODE/API_TOKEN/MANAGED_PREFIX/MAX_* from the file,
+  // so the env-var overrides have to be reapplied or token checks would revert to pref values.
+  if (ok) applyEnvOverrides?.();
   return { status: ok ? 200 : 500, body: ok ? "done\n" : "failed\n" };
 }
 
@@ -38,6 +48,7 @@ export async function updateConfHandler(postdata: string): Promise<SubResultLite
     await vfs.fileWrite(global.prefPath, postdata, true);
   });
   const ok = await readConf();
+  if (ok) applyEnvOverrides?.();
   return { status: ok ? 200 : 500, body: ok ? "done\n" : "failed\n" };
 }
 

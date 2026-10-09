@@ -8,7 +8,7 @@ import { isIPv4, isIPv6 } from "./util";
 import { tribool } from "../../lib/tribool";
 import { Proxy, ProxyType, SS_DEFAULT_GROUP, SOCKS_DEFAULT_GROUP, V2RAY_DEFAULT_GROUP, HTTP_DEFAULT_GROUP, TROJAN_DEFAULT_GROUP, SNELL_DEFAULT_GROUP, WG_DEFAULT_GROUP, ANYTLS_DEFAULT_GROUP, SSR_DEFAULT_GROUP, XRAY_DEFAULT_GROUP } from "../proxy";
 import { newProxy } from "../proxy";
-import { ss_ciphers, ssConstruct, ssrConstruct, socksConstruct, httpConstruct, trojanConstruct, snellConstruct, wireguardConstruct, vmessConstruct, anyTlSConstruct, vlessConstruct, parsePeers } from "./util";
+import { ss_ciphers, ssConstruct, ssrConstruct, socksConstruct, httpConstruct, trojanConstruct, snellConstruct, wireguardConstruct, vmessConstruct, anyTlSConstruct, vlessConstruct, parsePeers, splitHostPortRfind } from "./util";
 
 export function explodeSurge(surge0: string, nodes: Proxy[]): number {
   const index0 = nodes.length;
@@ -429,8 +429,11 @@ export function explodeSurge(surge0: string, nodes: Proxy[]): number {
         switch (remarks) {
           case "shadowsocks": {
             // quantumult x style ss/ssr link
-            server = trim(configs[0].substring(0, configs[0].lastIndexOf(":")));
-            port = trim(configs[0].substring(configs[0].lastIndexOf(":") + 1));
+            {
+              const hp = splitHostPortRfind(configs[0]);
+              server = trim(hp[0]);
+              port = trim(hp[1]);
+            }
             if (port === "0") continue;
             for (let i = 1; i < configs.length; i++) {
               vArray = splitFirst(trim(configs[i]), "=");
@@ -516,8 +519,11 @@ export function explodeSurge(surge0: string, nodes: Proxy[]): number {
           }
           case "vmess": {
             // quantumult x style vmess link
-            server = trim(configs[0].substring(0, configs[0].lastIndexOf(":")));
-            port = trim(configs[0].substring(configs[0].lastIndexOf(":") + 1));
+            {
+              const hp = splitHostPortRfind(configs[0]);
+              server = trim(hp[0]);
+              port = trim(hp[1]);
+            }
             if (port === "0") continue;
             net = "tcp";
             for (let i = 1; i < configs.length; i++) {
@@ -580,8 +586,11 @@ export function explodeSurge(surge0: string, nodes: Proxy[]): number {
           }
           case "vless": {
             // quantumult x style vless link
-            server = trim(configs[0].substring(0, configs[0].lastIndexOf(":")));
-            port = trim(configs[0].substring(configs[0].lastIndexOf(":") + 1));
+            {
+              const hp = splitHostPortRfind(configs[0]);
+              server = trim(hp[0]);
+              port = trim(hp[1]);
+            }
             if (port === "0") continue;
             net = "tcp";
             for (let i = 1; i < configs.length; i++) {
@@ -644,8 +653,11 @@ export function explodeSurge(surge0: string, nodes: Proxy[]): number {
           }
           case "trojan": {
             // quantumult x style trojan link
-            server = trim(configs[0].substring(0, configs[0].lastIndexOf(":")));
-            port = trim(configs[0].substring(configs[0].lastIndexOf(":") + 1));
+            {
+              const hp = splitHostPortRfind(configs[0]);
+              server = trim(hp[0]);
+              port = trim(hp[1]);
+            }
             if (port === "0") continue;
             for (let i = 1; i < configs.length; i++) {
               vArray = splitFirst(trim(configs[i]), "=");
@@ -691,8 +703,11 @@ export function explodeSurge(surge0: string, nodes: Proxy[]): number {
           }
           case "http": {
             // quantumult x style http links
-            server = trim(configs[0].substring(0, configs[0].lastIndexOf(":")));
-            port = trim(configs[0].substring(configs[0].lastIndexOf(":") + 1));
+            {
+              const hp = splitHostPortRfind(configs[0]);
+              server = trim(hp[0]);
+              port = trim(hp[1]);
+            }
             if (port === "0") continue;
             for (let i = 1; i < configs.length; i++) {
               vArray = splitFirst(trim(configs[i]), "=");

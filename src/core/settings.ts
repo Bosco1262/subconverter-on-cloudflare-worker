@@ -194,8 +194,8 @@ import { fileGet, fileExist } from "../lib/vfs";
 import { webGet } from "../lib/fetch";
 import type { RegexMatchConfigs } from "./info";
 import type { ProxyGroupConfigs } from "./extra";
-import { ProxyGroupType, BalanceStrategy } from "./extra";
-import type { ProxyGroupConfig } from "./extra";
+import { ProxyGroupType, BalanceStrategy, RULESET_SURGE } from "./extra";
+import type { ProxyGroupConfig, RulesetContent } from "./extra";
 import { tribool } from "../lib/tribool";
 import { toInt } from "../lib/string";
 
@@ -536,6 +536,26 @@ function readINIConf(content: string): boolean {
   return true;
 }
 
+// INIBinding::from<RulesetConfig>::from_ini (binding.h:306) — "group,url[,interval]", where
+// "url" starting with "[]" is literal inline rule content. Callers map this to their own shape.
+export function fromIniRulesetConfs(lines: string[]): [string, string, number][] {
+  const out: [string, string, number][] = [];
+  for (const x of lines) {
+    const pos = x.indexOf(",");
+    if (pos === -1) continue;
+    const group = x.substring(0, pos);
+    const rest = x.substring(pos + 1);
+    if (rest.startsWith("[]")) {
+      out.push([group, rest, 0]);
+      continue;
+    }
+    const epos = x.lastIndexOf(",");
+    if (pos !== epos) out.push([group, x.substring(pos + 1, epos), toInt(x.substring(epos + 1), 0)]);
+    else out.push([group, rest, 0]);
+  }
+  return out;
+}
+
 export async function refreshRulesets(
   rulesetConfigs: [string, string, string, number][], rulesetContent: RulesetContent[],
 ): Promise<void> {
@@ -544,20 +564,27 @@ export async function refreshRulesets(
   const results = await Promise.all(
     rulesetConfigs.map(async ([group, path, type, interval]) => {
       if (global.maxAllowedRulesets > 0 && total++ > global.maxAllowedRulesets) return null;
-      const ruleType = rulesetTypeFromName(type);
-      const rulePathTyped = path;
-      let content = "";
-      if (path.startsWith("!")) {
-        content = "[]" + path.substring(1); // inline rule
-      } else {
-        content = await fetchFile(path, global.proxyRuleset, global.cacheRuleset);
+      // settings.cpp:259 — inline ruleset: "[]" anywhere in the url marks literal rule content
+      // (e.g. "[]GEOIP,CN" / "rules/xx.list[]FINAL"); content is the url from "[]" onwards.
+      const pos = path.indexOf("[]");
+      if (pos !== -1) {
+        return {
+          rule_group: group,
+          rule_path: "",
+          rule_path_typed: "",
+          rule_format: "surge-ruleset",
+          rule_type: RULESET_SURGE,
+          rule_content: path.substring(pos),
+          update_interval: 0,
+        } satisfies RulesetContent;
       }
+      const content = await fetchFile(path, global.proxyRuleset, global.cacheRuleset);
       const rc: RulesetContent = {
         rule_group: group,
-        rule_path: path.startsWith("!") ? "" : path,
-        rule_path_typed: rulePathTyped,
+        rule_path: path,
+        rule_path_typed: path,
         rule_format: type,
-        rule_type: ruleType,
+        rule_type: rulesetTypeFromName(type),
         rule_content: content,
         update_interval: interval,
       };
@@ -566,8 +593,6 @@ export async function refreshRulesets(
   );
   for (const rc of results) if (rc) rulesetContent.push(rc);
 }
-
-import type { RulesetContent } from "./extra";
 
 function rulesetTypeFromName(type: string): number {
   switch (type) {

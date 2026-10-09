@@ -6,6 +6,16 @@ import { urlDecode } from "../../lib/urlencode";
 import { regFind, regGetAllMatch, regMatch, regReplace } from "../../lib/regex";
 import { newProxy, Proxy, ProxyType, SS_DEFAULT_GROUP } from "../proxy";
 
+// C++ `s.substr(0, s.rfind(':'))` paired with `s.substr(s.rfind(':') + 1)`: `rfind` returns npos when
+// the value has no colon, and `substr(0, npos)` is the WHOLE string (while `substr(npos + 1)` is
+// `substr(0)`, also the whole string). JS `substring(0, -1)` collapses to "" instead, which silently
+// dropped hostnames. Returns [host, portText] with both equal to the input when there is no colon.
+export function splitHostPortRfind(value: string): [string, string] {
+  const pos = value.lastIndexOf(":");
+  if (pos === -1) return [value, value];
+  return [value.substring(0, pos), value.substring(pos + 1)];
+}
+
 export function isIPv4(address: string): boolean {
   return regMatch(address, "^(25[0-5]|2[0-4]\\d|[0-1]?\\d?\\d)(\\.(25[0-5]|2[0-4]\\d|[0-1]?\\d?\\d)){3}$");
 }
@@ -464,10 +474,16 @@ export function parsePeers(node: Proxy, data: string): void {
       case "public-key":
         node.PublicKey = val;
         break;
-      case "endpoint":
-        node.Hostname = val.substring(0, val.lastIndexOf(":"));
-        node.Port = toInt(val.substring(val.lastIndexOf(":") + 1));
+      case "endpoint": {
+        // C++ `val.substr(0, val.rfind(':'))` / `substr(rfind(':') + 1)`: rfind yields npos when the
+        // value has no colon, and substr(0, npos) is the WHOLE string (substr(npos+1) == substr(0)
+        // too), so upstream keeps the hostname and gets port 0. JS substring(0, -1) collapses to ""
+        // and silently dropped the hostname.
+        const hp = splitHostPortRfind(val);
+        node.Hostname = hp[0];
+        node.Port = toInt(hp[1]);
         break;
+      }
       case "client-id":
         node.ClientId = val;
         break;

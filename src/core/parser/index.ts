@@ -48,7 +48,8 @@ export function explodeSub(sub0: string, nodes: Proxy[]): void {
   if (!processed && regFind(sub, "\"?(Proxy|proxies)\"?:")) {
     const m = regGetMatch(sub, "^(?:Proxy|proxies):$\\s(?:(?:^ +?.*$| *?-.*$|)\\s?)+");
     if (m && m.length > 0) sub = m[0]; // C++ fills out-param with result[0] (full match)
-    const yamlnode = loadYaml(sub);
+    // rawScalarText mirrors yaml-cpp's as<std::string>() so numeric-looking strings survive
+    const yamlnode = loadYaml(sub, { rawScalarText: true });
     if (yamlnode && Object.keys(yamlnode).length > 0 && ("Proxy" in yamlnode || "proxies" in yamlnode)) {
       explodeClash(yamlnode, nodes);
       processed = true;

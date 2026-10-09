@@ -294,7 +294,11 @@ export function proxyToSurge(
       }
     }
 
-    group = (x.Type === ProxyGroupType.Smart ? "url-test" : proxyGroupTypeStr(x.Type)) + ",";
+    // upstream uses x.TypeStr() for every target here (subexport.cpp:1260), and TypeStr() maps Smart
+    // to "smart" (proxygroup.h:50). The Smart→url-test substitution belongs only to the Clash
+    // exporter (:781-782); applying it here produced an unusable `NAME = url-test,node` line with no
+    // url=, because the url/interval branch below only covers url-test/fallback/load-balance.
+    group = proxyGroupTypeStr(x.Type) + ",";
     group += join(filteredNodelist, ",");
     if (x.Type === ProxyGroupType.URLTest || x.Type === ProxyGroupType.Fallback || x.Type === ProxyGroupType.LoadBalance) {
       group += ",url=" + x.Url + ",interval=" + x.Interval;

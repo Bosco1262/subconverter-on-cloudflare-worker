@@ -2,7 +2,7 @@
 
 import { Proxy, V2RAY_DEFAULT_GROUP, SS_DEFAULT_GROUP, SOCKS_DEFAULT_GROUP, SSR_DEFAULT_GROUP, HTTP_DEFAULT_GROUP, TROJAN_DEFAULT_GROUP, SNELL_DEFAULT_GROUP, WG_DEFAULT_GROUP, XRAY_DEFAULT_GROUP, HYSTERIA_DEFAULT_GROUP, HYSTERIA2_DEFAULT_GROUP, TUIC_DEFAULT_GROUP, ANYTLS_DEFAULT_GROUP, MIERU_DEFAULT_GROUP } from "../proxy";
 import { newProxy } from "../proxy";
-import { yAsStr, yAsStrList, yIsDefined, yStr, type YNode } from "../../lib/yaml";
+import { yAsBool, yAsStr, yAsStrList, yAsUint16, yIsDefined, yStr, type YNode } from "../../lib/yaml";
 import { replaceAllDistinct, toInt, toLower } from "../../lib/string";
 import { ssConstruct, ssrConstruct, socksConstruct, httpConstruct, trojanConstruct, snellConstruct, wireguardConstruct, vmessConstruct, vlessConstruct, hysteriaConstruct, hysteria2Construct, tuicConstruct, anyTlSConstruct, mieruConstruct, isIPv4, isIPv6, xhttp_option_keys } from "./util";
 import { tribool } from "../../lib/tribool";
@@ -333,8 +333,10 @@ export function explodeClash(yamlnode: Record<string, unknown>, nodes: Proxy[]):
             sid = yStr(realityOpts["short-id"]);
           }
           flow = yStr(singleproxy["flow"]);
+          // upstream is `singleproxy["client-fingerprint"] >>= fp` (subparser.cpp:1613), which always
+          // assigns: with the key absent safe_as<std::string> gives "", wiping the "chrome"
+          // initialiser declared at subparser.cpp:1302. So an absent key means "", not "chrome".
           fp = yStr(singleproxy["client-fingerprint"]);
-          if (fp.length === 0) fp = "chrome";
           try {
             alpnList = yAsStrList(singleproxy["alpn"]);
           } catch {
@@ -393,7 +395,10 @@ export function explodeClash(yamlnode: Record<string, unknown>, nodes: Proxy[]):
         }
         case "tuic": {
           group = TUIC_DEFAULT_GROUP;
-          let request_timeout = 15000;
+          // upstream: `uint16_t request_timeout; ... singleproxy["request-timeout"] >>= request_timeout`
+          // (subparser.cpp:1681/1693) — safe_as gives 0 when the key is absent and the value is stored
+          // verbatim in a uint16, so >=65536 wraps. This used to default to 15000 and clamp instead.
+          let request_timeout = yAsUint16(singleproxy["request-timeout"]);
           password = yStr(singleproxy["password"]);
           id = yStr(singleproxy["uuid"]);
           congestion_control = yStr(singleproxy["congestion-controller"]);
@@ -403,16 +408,10 @@ export function explodeClash(yamlnode: Record<string, unknown>, nodes: Proxy[]):
           if (alpnNode !== null && alpnNode !== undefined) {
             if (Array.isArray(alpnNode) && alpnNode.length > 0) alpn = yAsStr(alpnNode[0]);
           }
-          const disableSni = new tribool(yStr(singleproxy["disable-sni"]));
-          const reduceRtt = new tribool(yStr(singleproxy["reduce-rtt"]));
+          // upstream declares these as `bool` (not tribool), so an absent key is false, not undef
+          const disableSni = new tribool(yAsBool(singleproxy["disable-sni"]));
+          const reduceRtt = new tribool(yAsBool(singleproxy["reduce-rtt"]));
           token = yStr(singleproxy["token"]);
-          {
-            const rt = yStr(singleproxy["request-timeout"]);
-            if (rt.length > 0) {
-              const n = toInt(rt, 0);
-              request_timeout = n > 0 && n < 65536 ? n : 15000;
-            }
-          }
           tuicConstruct(node, TUIC_DEFAULT_GROUP, ps, server, port, password, congestion_control, alpn, sni, id, udp_relay_mode, token, new tribool(), new tribool(), scv, reduceRtt, disableSni, request_timeout, underlying_proxy);
           break;
         }

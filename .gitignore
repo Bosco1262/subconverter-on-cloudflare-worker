@@ -2,3 +2,9 @@ node_modules/
 .wrangler/
 dist/
 *.log
+
+# temporary audit harness (see README/dev notes); not part of the shipped worker
+.audit/
+audit-verify*.ts
+audit-loader.mjs
+audit-register.mjs

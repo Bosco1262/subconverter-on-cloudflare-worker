@@ -14,6 +14,7 @@ DTABLE["_".charCodeAt(0)] = DTABLE["/".charCodeAt(0)];
 ITABLE["_".charCodeAt(0)] = 2;
 
 const decoder = new TextDecoder("utf-8");
+const encoder = new TextEncoder();
 
 export function base64Encode(stringToEncode: string): string {
   const bytes = new TextEncoder().encode(stringToEncode);
@@ -36,14 +37,19 @@ export function base64Encode(stringToEncode: string): string {
 }
 
 export function base64Decode(encodedString: string, acceptUrlsafe = false): string {
-  const len = encodedString.length;
+  // Operate on the UTF-8 BYTES of the input: upstream walks the bytes of a std::string, so a
+  // character outside the base64 alphabet is copied through verbatim. Indexing UTF-16 code units and
+  // masking with & 0xff (the earlier behaviour) corrupted every non-ASCII input — `base64Decode("你好")`
+  // returned garbage instead of "你好".
+  const input = encoder.encode(encodedString);
+  const len = input.length;
   const out: number[] = [];
   const charArray4: number[] = [0, 0, 0, 0];
   let i = 0;
   let in_ = 0;
-  while (in_ < len && encodedString[in_] !== "=") {
-    const uchar = encodedString.charCodeAt(in_) & 0xff;
-    const valid = acceptUrlsafe ? ITABLE[uchar] : ITABLE[uchar] === 1;
+  while (in_ < len && input[in_] !== 0x3d /* '=' */) {
+    const uchar = input[in_];
+    const valid = acceptUrlsafe ? ITABLE[uchar] !== 0 : ITABLE[uchar] === 1;
     if (!valid) {
       // not base64 data — copy verbatim (C++ behavior)
       out.push(uchar);
@@ -64,12 +70,12 @@ export function base64Decode(encodedString: string, acceptUrlsafe = false): stri
   if (i) {
     for (let j = i; j < 4; j++) charArray4[j] = 0;
     const d0 = DTABLE[charArray4[0]], d1 = DTABLE[charArray4[1]], d2 = DTABLE[charArray4[2]], d3 = DTABLE[charArray4[3]];
-    const bytes = [
+    const tail = [
       (d0 << 2) + ((d1 & 0x30) >> 4),
       ((d1 & 0xf) << 4) + ((d2 & 0x3c) >> 2),
       ((d2 & 0x3) << 6) + d3,
     ];
-    for (let j = 0; j < i - 1; j++) out.push(bytes[j]);
+    for (let j = 0; j < i - 1; j++) out.push(tail[j]);
   }
   return decoder.decode(new Uint8Array(out));
 }

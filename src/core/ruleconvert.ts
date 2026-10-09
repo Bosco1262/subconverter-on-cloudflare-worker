@@ -638,8 +638,11 @@ export function renderClashScript(
       ensureProvider(baseRule, x, "classical", url, remotePathPrefix, interval, format, ".yaml");
     }
     if (script) {
-      // script data collected for template render below
-      scriptData.push({ has_domain: groupHasDomain ? "true" : "false", has_ipcidr: groupHasIpcidr ? "true" : "false", name: x, group: name, keyword, original: (ruleType.get(x) === RULESET_CLASH_DOMAIN || ruleType.get(x) === RULESET_CLASH_IPCIDR) ? "true" : "false" });
+      // script data collected for template render below.
+      // Upstream also sets `rules.<i>.set = "true"` (templates.cpp:549) and the built-in clash script
+      // template gates on `{% if rule.set == "true" %}` (templates.cpp:264) — omitting the key made
+      // the generated script contain no rule blocks at all.
+      scriptData.push({ set: "true", has_domain: groupHasDomain ? "true" : "false", has_ipcidr: groupHasIpcidr ? "true" : "false", name: x, group: name, keyword, original: (ruleType.get(x) === RULESET_CLASH_DOMAIN || ruleType.get(x) === RULESET_CLASH_IPCIDR) ? "true" : "false" });
     }
     index++;
   }

@@ -519,34 +519,72 @@ export function proxyToClashCore(
   else yamlnode["Proxy Group"] = originalGroups;
 }
 
-function dumpYaml(yamlnode: Record<string, unknown>, proxyBlock = false, groupBlock = false): string {
-  const doc = new Document(yamlnode, { version: "1.1" });
-  const walk = (node: unknown) => {
-    if (node instanceof YAMLSeq) {
-      for (const item of node.items) {
-        if (!proxyBlock && item instanceof YAMLMap) item.flow = true;
-        walk(item);
-      }
-    } else if (node instanceof YAMLMap) {
-      for (const pair of node.items) walk(pair.value);
-    }
+// yaml-cpp forces quoting on a digit-only password with `SetTag("str")` and then strips the emitted
+// "!<str> " prefix (subexport.cpp:314-315 / :925). The yaml library has no equivalent for a plain
+// value, so the marker class is converted into a real double-quoted Scalar node here — otherwise it
+// was serialised as a MAP (`password: { value: "123456" }`) and the config was rejected.
+function toYamlNodes(value: unknown): unknown {
+  if (value instanceof ScalarStr) {
+    const scalar = new Scalar(value.value);
+    scalar.type = Scalar.QUOTE_DOUBLE;
+    return scalar;
+  }
+  if (Array.isArray(value)) return value.map(toYamlNodes);
+  if (value && typeof value === "object") {
+    const out: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(value as Record<string, unknown>)) out[k] = toYamlNodes(v);
+    return out;
+  }
+  return value;
+}
+
+// Clash output styles. Upstream parses both pref strings into a block/compact pair per target
+// (subexport.cpp:260-282), applies Flow|Block to every proxy (:751-754) and every group (:825-828),
+// and finally sets the whole SEQUENCE to Flow when the style is "compact" (:760-761 / :841-842).
+// The port read ext.clash_proxies_style / ext.clash_proxy_groups_style into the settings but never
+// passed them to the dumper, so every style silently produced the default flow output.
+export interface ClashStyles {
+  proxyBlock: boolean;
+  proxyCompact: boolean;
+  groupBlock: boolean;
+  groupCompact: boolean;
+}
+
+function styleKind(style: string): "flow" | "block" | "compact" {
+  if (style === "block") return "block";
+  if (style === "compact") return "compact";
+  return "flow";
+}
+
+export function parseClashStyles(proxiesStyle: string, groupsStyle: string): ClashStyles {
+  return {
+    proxyBlock: styleKind(proxiesStyle) === "block",
+    proxyCompact: styleKind(proxiesStyle) === "compact",
+    groupBlock: styleKind(groupsStyle) === "block",
+    groupCompact: styleKind(groupsStyle) === "compact",
   };
-  // apply flow style to proxies and proxy-groups entries unless block requested
-  const applyFlow = (key: string) => {
-    const v = doc.get(key, true);
-    if (v instanceof YAMLSeq) {
-      for (const item of v.items) {
-        if (item instanceof YAMLMap) item.flow = !proxyBlock;
-        if (!groupBlock && key !== "proxies" && key !== "Proxy") {
-          // groups handled below
-        }
-      }
+}
+
+const DEFAULT_CLASH_STYLES: ClashStyles = { proxyBlock: false, proxyCompact: false, groupBlock: false, groupCompact: false };
+
+function applyClashStyles(doc: Document, styles: ClashStyles): void {
+  const styleSeq = (key: string, block: boolean, compact: boolean): void => {
+    const seq = doc.get(key, true);
+    if (!(seq instanceof YAMLSeq)) return;
+    for (const item of seq.items) {
+      if (item instanceof YAMLMap) item.flow = !block;
     }
+    if (compact) seq.flow = true;
   };
-  applyFlow("proxies");
-  applyFlow("Proxy");
-  applyFlow("proxy-groups");
-  applyFlow("Proxy Group");
+  styleSeq("proxies", styles.proxyBlock, styles.proxyCompact);
+  styleSeq("Proxy", styles.proxyBlock, styles.proxyCompact);
+  styleSeq("proxy-groups", styles.groupBlock, styles.groupCompact);
+  styleSeq("Proxy Group", styles.groupBlock, styles.groupCompact);
+}
+
+function dumpYaml(yamlnode: Record<string, unknown>, styles: ClashStyles = DEFAULT_CLASH_STYLES): string {
+  const doc = new Document(toYamlNodes(yamlnode) as Record<string, unknown>, { version: "1.1" });
+  applyClashStyles(doc, styles);
   return yamlStringify(doc, { lineWidth: 0 });
 }
 
@@ -561,10 +599,11 @@ export function proxyToClash(
   }
 
   proxyToClashCore(nodes, yamlnode, extraProxyGroup, clashR, ext);
+  const styles = parseClashStyles(ext.clash_proxies_style, ext.clash_proxy_groups_style);
 
-  if (ext.nodelist) return formatterShortId(dumpYaml(yamlnode));
+  if (ext.nodelist) return formatterShortId(dumpYaml(yamlnode, styles));
 
-  if (!ext.enable_rule_generator) return formatterShortId(dumpYaml(yamlnode));
+  if (!ext.enable_rule_generator) return formatterShortId(dumpYaml(yamlnode, styles));
 
   if (ext.managed_config_prefix.length > 0 || ext.clash_script) {
     if (yamlnode["mode"] !== undefined) {
@@ -572,11 +611,11 @@ export function proxyToClash(
       else yamlnode["mode"] = ext.clash_script ? "Script" : "Rule";
     }
     renderClashScript(yamlnode, rulesetContentArray, ext.managed_config_prefix, ext.clash_script, ext.overwrite_original_rules, ext.clash_classical_ruleset);
-    return formatterShortId(dumpYaml(yamlnode));
+    return formatterShortId(dumpYaml(yamlnode, styles));
   }
 
   const rulesStr = rulesetToClashStr(yamlnode, rulesetContentArray, ext.overwrite_original_rules, ext.clash_new_field_name);
-  const yamlnodeStr = dumpYaml(yamlnode);
+  const yamlnodeStr = dumpYaml(yamlnode, styles);
   let outputContent = yamlnodeStr + rulesStr;
   outputContent = replaceAll(outputContent, "!<str> ", "");
   return formatterShortId(outputContent);
@@ -584,5 +623,5 @@ export function proxyToClash(
 
 export function proxyToClashNodelist(nodes: Proxy[], yamlnodeObj: Record<string, unknown>, extraProxyGroup: ProxyGroupConfig[], clashR: boolean, ext: extra_settings): string {
   proxyToClashCore(nodes, yamlnodeObj, extraProxyGroup, clashR, ext);
-  return formatterShortId(dumpYaml(yamlnodeObj));
+  return formatterShortId(dumpYaml(yamlnodeObj, parseClashStyles(ext.clash_proxies_style, ext.clash_proxy_groups_style)));
 }

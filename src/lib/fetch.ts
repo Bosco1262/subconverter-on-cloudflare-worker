@@ -121,7 +121,9 @@ export async function webGet(url: string, options: WebGetOptions = {}): Promise<
       const { base64Decode } = await import("./base64");
       return base64Decode(data, true);
     }
-    return decodeURIComponent(data);
+    // C++ urlDecode is lenient (copies bad escapes verbatim); decodeURIComponent throws URIError
+    const { urlDecode } = await import("./urlencode");
+    return urlDecode(data);
   }
 
   const cacheTTL = options.cacheTTL ?? 0;

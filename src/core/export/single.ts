@@ -8,7 +8,7 @@ import type { extra_settings, RulesetContent } from "../extra";
 import { vmessLinkConstruct } from "./common";
 import { ss_ciphers, ssr_ciphers } from "../parser/util";
 import { getMember } from "../parser/util";
-import { toNumber, getUrlArg, replaceAllDistinct, trimWhitespace } from "../../lib/string";
+import { toNumber, getUrlArg, replaceAllDistinct, trimWhitespace, toInt } from "../../lib/string";
 import { dateStringToTimestamp } from "../info";
 
 export function proxyToSingle(nodes: Proxy[], types: number, ext: extra_settings): string {
@@ -199,10 +199,14 @@ export function proxyToSSD(nodes: Proxy[], group0: string, userinfo: string, ext
     root["traffic_used"] = used;
     root["traffic_total"] = tot;
     if (expiry.length > 0) {
-      const rawtime = Number(getUrlArg(expiry, "") || expiry) * 1000;
+      // upstream: `const time_t rawtime = to_int(expiry);` → 0 for anything non-numeric, then
+      // localtime + strftime (subexport.cpp:2083-2089). `Number(...)` produced NaN and the field was
+      // emitted as "NaN-NaN-NaN NaN:NaN"; the Worker's local time is UTC, so format in UTC explicitly
+      // to keep the value stable instead of host-dependent.
+      const rawtime = toInt(expiry, 0) * 1000;
       const dt = new Date(rawtime);
       const pad = (n: number) => String(n).padStart(2, "0");
-      root["expiry"] = `${dt.getFullYear()}-${pad(dt.getMonth() + 1)}-${pad(dt.getDate())} ${pad(dt.getHours())}:${pad(dt.getMinutes())}`;
+      root["expiry"] = `${dt.getUTCFullYear()}-${pad(dt.getUTCMonth() + 1)}-${pad(dt.getUTCDate())} ${pad(dt.getUTCHours())}:${pad(dt.getUTCMinutes())}`;
       void dateStringToTimestamp;
     }
   }

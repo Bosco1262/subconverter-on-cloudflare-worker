@@ -24,9 +24,19 @@ export function setTemplateWebGet(fn: (url: string) => string): void {
   templateWebGetFn = fn;
 }
 
+// Property names that must never be traversed or written: `obj["__proto__"]` IS Object.prototype, so
+// writing through it pollutes every object in the isolate (i.e. every later request). Upstream writes
+// into inja's own nlohmann::json value (templates.cpp:150-155) and C++ has no prototype chain.
+const FORBIDDEN_PATH_SEGMENTS = new Set(["__proto__", "prototype", "constructor"]);
+
+function isSafePath(path: string): boolean {
+  return !path.split(".").some((p) => FORBIDDEN_PATH_SEGMENTS.has(p));
+}
+
 // parse_json_pointer semantics: "clash.http_port" → nested object; also supports "/a/b" json-pointer form
 function parseJsonPointer(data: TObject, key: string, value: string): void {
   const path = key.replace(/\//g, ".").replace(/^\./, "");
+  if (!isSafePath(path)) return;
   const parts = path.split(".");
   let cur: TObject = data;
   for (let i = 0; i < parts.length - 1; i++) {
@@ -34,6 +44,20 @@ function parseJsonPointer(data: TObject, key: string, value: string): void {
     cur = cur[parts[i]] as TObject;
   }
   cur[parts[parts.length - 1]] = value;
+}
+
+// Read the value at a dot path the way upstream's `data[pointer].get<std::string>()` does: anything
+// missing or non-string yields "" (nlohmann throws on a non-string and the caller swallows it).
+function readJsonPointer(data: TObject, key: string): string {
+  const path = key.replace(/\//g, ".").replace(/^\./, "");
+  if (!isSafePath(path)) return "";
+  const parts = path.split(".");
+  let cur: unknown = data;
+  for (const p of parts) {
+    if (cur === null || typeof cur !== "object" || !Object.prototype.hasOwnProperty.call(cur, p)) return "";
+    cur = (cur as TObject)[p];
+  }
+  return typeof cur === "string" ? cur : "";
 }
 
 export function render_template(
@@ -81,22 +105,10 @@ export function render_template(
     } },
     append: { arity: 2, fn: (args) => {
       const path = String(args[0] ?? ""), value = String(args[1] ?? "");
-      const dotPath = path.replace(/\//g, ".").replace(/^\./, "");
-      const parts = dotPath.split(".");
-      let cur: TObject = data;
-      let exists = true;
-      for (const p of parts) {
-        if (typeof cur[p] !== "object" || cur[p] === null) {
-          if (p === parts[parts.length - 1] && typeof cur[p] === "string") {
-            cur[p] = cur[p] + value;
-            return "";
-          }
-          exists = false;
-          break;
-        }
-        cur = cur[p] as TObject;
-      }
-      void exists;
+      // upstream (templates.cpp:164-179) reads the existing value — "" when the path does not exist,
+      // because the lookup throws and is swallowed — appends, then assigns UNCONDITIONALLY. The port
+      // used to bail out on a missing path, so `append("local.k","a")` wrote nothing at all.
+      parseJsonPointer(data, path, readJsonPointer(data, path) + value);
       return "";
     } },
     getLink: { arity: 1, fn: (args) => global.managedConfigPrefix + String(args[0] ?? "") },

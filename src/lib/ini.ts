@@ -32,6 +32,24 @@ export class INIReader {
 
   private last_error: number = INIREADER_EXCEPTION.NONE;
 
+  // Sections touched by set() since their last read. Upstream stores items in a std::multimap, so
+  // iteration order is key-sorted without any explicit sort. Sorting the array on EVERY insert made
+  // set() cost O(n log n) per call (O(n^2 log n) for n rules) and the result was then discarded —
+  // so the order is materialised lazily on the first read instead.
+  private dirty_sections = new Set<string>();
+
+  private ensureSorted(section: string): void {
+    if (!this.dirty_sections.has(section)) return;
+    const items = this.ini_content.get(section);
+    this.dirty_sections.delete(section);
+    if (!items) return;
+    // sortItems() returns a new array, so the order has to be written back into the SAME array to
+    // keep the identity that callers may already hold.
+    const sorted = sortItems(items);
+    items.length = 0;
+    items.push(...sorted);
+  }
+
   private saveError(x: number): number {
     this.last_error = x;
     return x;
@@ -66,6 +84,7 @@ export class INIReader {
   eraseAll(): void {
     this.ini_content.clear();
     this.section_order = [];
+    this.dirty_sections.clear();
     this.parsed = false;
   }
 
@@ -73,27 +92,42 @@ export class INIReader {
     if (content.length === 0) return this.saveError(INIREADER_EXCEPTION.EMPTY);
     if (content.startsWith("\uFEFF")) content = content.substring(1);
 
+    // upstream calls erase_all() at the top of parse (ini_reader.h:234): a failed parse must not
+    // leave the previous parse's content readable.
+    this.eraseAll();
+
     const sections = new Map<string, IniItem[]>();
     const order: string[] = [];
     let inIsolatedSection = false;
     let curSection = "";
+    // The last section TITLE actually read. Upstream keeps this separate from curSection, which
+    // store_isolated_line pre-sets to the isolated section (ini_reader.h:228/240). Comparing the
+    // isolated section against curSection — as this port did — made the condition always false, so
+    // headerless documents (e.g. a Surge proxy list without "[Proxy]") lost the whole section.
+    let lastTitle = "";
     let itemGroup: IniItem[] = [];
     const read_sections: string[] = [];
     const delimiter = getLineBreak(content);
+    let parseError: number | null = null;
 
-    const flushSection = (isFinal: boolean) => {
+    const flushSection = (isFinal: boolean, title: string) => {
+      if (parseError !== null) return;
       if (curSection.length === 0) return;
       if (!(this.keep_empty_section || itemGroup.length > 0)) return;
       const existing = sections.get(curSection);
       if (existing) {
-        if (this.allow_dup_section_titles || (isFinal && this.isolated_items_section === curSection)) {
+        // upstream: merge when duplicate titles are allowed, or (final flush only) when this is the
+        // isolated section; otherwise report DUPLICATE and stop (ini_reader.h:264-272, 312-320)
+        const mergeable = this.allow_dup_section_titles || (isFinal ? this.isolated_items_section === title : existing.length === 0);
+        if (mergeable) {
           existing.push(...itemGroup);
           sortItems(existing);
+        } else if (existing.length > 0) {
+          parseError = INIREADER_EXCEPTION.DUPLICATE;
         }
-        // else: duplicate not allowed — upstream stops; we keep going with merged data
         return;
       }
-      if (!inIsolatedSection || this.isolated_items_section !== curSection) {
+      if (!inIsolatedSection || this.isolated_items_section !== title) {
         if (itemGroup.length > 0) read_sections.push(curSection);
         if (!order.includes(curSection)) order.push(curSection);
         sections.set(curSection, sortItems(itemGroup));
@@ -123,10 +157,12 @@ export class INIReader {
         const thisSection = strLine.substring(1, strLine.length - 1);
         inExcludedSection = this.chkIgnore(thisSection);
         inDirectSaveSection = this.chkDirectSave(thisSection);
-        flushSection(false);
+        flushSection(false, thisSection);
+        if (parseError !== null) return this.saveError(parseError);
         inIsolatedSection = false;
         itemGroup = [];
         curSection = thisSection;
+        lastTitle = thisSection;
       } else if (((this.store_any_line && pos_equal === -1) || inDirectSaveSection) && !inExcludedSection && curSection.length > 0) {
         itemGroup.push(["{NONAME}", strLine]);
       } else if (pos_equal !== -1) {
@@ -143,11 +179,13 @@ export class INIReader {
       }
       if (this.include_sections.length > 0 && arraysEqual(this.include_sections, read_sections)) break;
     }
-    flushSection(true);
+    flushSection(true, lastTitle);
+    if (parseError !== null) return this.saveError(parseError);
 
     this.ini_content = sections;
     this.section_order = order;
     this.parsed = true;
+    this.dirty_sections.clear();
     return this.saveError(INIREADER_EXCEPTION.NONE);
   }
 
@@ -175,6 +213,7 @@ export class INIReader {
 
   itemExist(section: string, itemName: string): boolean {
     if (!this.sectionExist(section)) return false;
+    this.ensureSorted(section);
     const items = this.ini_content.get(section)!;
     return items.some(([k]) => k === itemName);
   }
@@ -186,6 +225,7 @@ export class INIReader {
 
   // all items in section, in multimap (key-sorted) order
   getItems(section: string): IniItem[] {
+    this.ensureSorted(section);
     return this.ini_content.get(section) ?? [];
   }
 
@@ -195,6 +235,7 @@ export class INIReader {
 
   // items with name prefix
   getAll(section: string, itemName: string): string[] {
+    this.ensureSorted(section);
     const items = this.ini_content.get(section);
     if (!items) return [];
     return items.filter(([k]) => k.startsWith(itemName)).map(([, v]) => v);
@@ -205,6 +246,7 @@ export class INIReader {
   }
 
   get(section: string, itemName: string): string {
+    this.ensureSorted(section);
     const items = this.ini_content.get(section);
     if (!items) return "";
     for (const [k, v] of items) if (k === itemName) return v;
@@ -234,9 +276,9 @@ export class INIReader {
     const existing = this.ini_content.get(section);
     if (existing) {
       existing.push([itemName, itemVal]);
-      sortItems(existing);
+      this.dirty_sections.add(section);
     } else {
-      this.ini_content.set(section, sortItems([[itemName, itemVal]]));
+      this.ini_content.set(section, [[itemName, itemVal]]);
       this.section_order.push(section);
     }
     return this.saveError(INIREADER_EXCEPTION.NONE);
@@ -294,6 +336,7 @@ export class INIReader {
     let content = "";
     if (!this.parsed) return "";
     for (const x of this.section_order) {
+      this.ensureSorted(x);
       content += "[" + x + "]\n";
       const section = this.ini_content.get(x);
       if (section) {

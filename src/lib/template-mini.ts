@@ -446,6 +446,8 @@ function renderNodes(nodes: TNode[], ctx: RenderCtx): string {
       case "for": {
         const arr = evalExpr(node.arrExpr, ctx);
         const items = Array.isArray(arr) ? arr : typeof arr === "object" && arr !== null ? Object.entries(arr as TObject) : [];
+        // `{% for __proto__ in x %}` would otherwise set the prototype of the loop-variable holder
+        if (!isSafePathSegment(node.varName)) break;
         for (const item of items) {
           if (Array.isArray(item) && item.length === 2 && typeof item[0] === "string") {
             ctx.loopVars[node.varName] = item[0];
@@ -476,8 +478,20 @@ function renderNodes(nodes: TNode[], ctx: RenderCtx): string {
   return out;
 }
 
+// Property names that must never be traversed or written: `obj["__proto__"]` is Object.prototype
+// itself, so descending into it and assigning pollutes EVERY object in the isolate (and therefore
+// every later request). inja rejects a dotted `{% set %}` key outright — it requires a single Id
+// token — and its data store is a C++ json object with no prototype chain, so this guard restores
+// the upstream behaviour instead of allowing prototype pollution.
+const FORBIDDEN_PATH_SEGMENTS = new Set(["__proto__", "prototype", "constructor"]);
+
+function isSafePathSegment(segment: string): boolean {
+  return !FORBIDDEN_PATH_SEGMENTS.has(segment);
+}
+
 function setByPath(obj: TObject, path: string, value: string): void {
   const parts = path.split(".");
+  if (parts.some((p) => !isSafePathSegment(p))) return;
   let cur: TObject = obj;
   for (let i = 0; i < parts.length - 1; i++) {
     if (typeof cur[parts[i]] !== "object" || cur[parts[i]] === null) cur[parts[i]] = {};
@@ -494,6 +508,7 @@ function evalExpr(expr: string, ctx: RenderCtx): TValue {
 function resolvePath(data: TObject, path: string, ctx: RenderCtx): TValue {
   if (ctx.loopVars && path in ctx.loopVars) return ctx.loopVars[path];
   const parts = path.split(".");
+  if (parts.some((p) => !isSafePathSegment(p))) return undefined;
   let cur: TValue = data;
   for (const p of parts) {
     if (cur === undefined || cur === null) return undefined;

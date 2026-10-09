@@ -1,9 +1,9 @@
 // Port of interfaces.cpp: getRuleset (134-285), surgeConfToClash (930-1141), getProfile (1143-1232), renderTemplate (1387-1420)
 
-import { global, fetchFile } from "../core/settings";
+import { global, fetchFile, fromIniRulesetConfs } from "../core/settings";
 import { subconverter, type SubRequest, type SubResult } from "../core/orchestrator";
 import type { extra_settings, RulesetContent, ProxyGroupConfig, ProxyGroupType } from "../core/extra";
-import { newExtraSettings, RULESET_SURGE } from "../core/extra";
+import { newExtraSettings, RULESET_SURGE, RULESET_QUANX } from "../core/extra";
 import { newProxy, Proxy } from "../core/proxy";
 import { addNodes } from "../core/nodemanip";
 import { proxyToClashCore } from "../core/export/clash";
@@ -53,22 +53,31 @@ export async function getRulesetHandler(req: SubRequest): Promise<SubResult> {
   }
 
   const vArray = split(url, "|").map((x) => "ruleset," + x);
-  const confs: [string, string, string, number][] = [];
-  for (const line of vArray) {
-    const parts = split(line, ",");
-    if (parts.length < 2) continue;
-    confs.push([parts[0].trim(), parts[1].trim(), type === "2" ? "quanx-ruleset" : "surge-ruleset", 0]);
-  }
+  // INIBinding::from<RulesetConfig>::from_ini + refreshRulesets: "[]" anywhere in the url marks
+  // literal inline rule content, and the content is the url from "[]" onwards.
+  const confs = fromIniRulesetConfs(vArray);
   const rca: RulesetContent[] = [];
-  // fetch each ruleset
-  for (const [, path, ,] of confs) {
+  for (const [, path] of confs) {
+    const pos = path.indexOf("[]");
+    if (pos !== -1) {
+      rca.push({
+        rule_group: "",
+        rule_path: "",
+        rule_path_typed: "",
+        rule_format: "surge-ruleset",
+        rule_type: RULESET_SURGE,
+        rule_content: path.substring(pos),
+        update_interval: 0,
+      });
+      continue;
+    }
     const content = await fetchFile(path, parseProxy(global.proxyRuleset), global.enableCache ? global.cacheRuleset : 0);
     rca.push({
       rule_group: "",
       rule_path: path,
       rule_path_typed: path,
       rule_format: "",
-      rule_type: type === "2" ? 1 : RULESET_SURGE,
+      rule_type: type === "2" ? RULESET_QUANX : RULESET_SURGE,
       rule_content: content,
       update_interval: 0,
     });
@@ -93,16 +102,16 @@ export async function getRulesetHandler(req: SubRequest): Promise<SubResult> {
   if (typeInt === 3 || typeInt === 4 || typeInt === 6) finalOutput = "payload:\n";
 
   const filterLine = (): number => {
-    let posb = 0;
+    filterPosb = 0;
     let pose = strLine.v.indexOf(",");
     if (pose === -1) return 1;
-    posb = pose + 1;
-    pose = strLine.v.indexOf(",", posb);
+    filterPosb = pose + 1;
+    pose = strLine.v.indexOf(",", filterPosb);
     if (pose === -1) {
       pose = strLine.v.length;
       if (strLine.v[pose - 1] === "\r") pose--;
     }
-    pose -= posb;
+    filterPose = pose - filterPosb;
     return 0;
   };
 
@@ -202,6 +211,9 @@ export async function surgeConfToClashHandler(req: SubRequest): Promise<SubResul
   const ini = new INIReader();
   const nodes: Proxy[] = [];
   let url = joined.length <= 5 ? "" : joined.substring(5);
+  // Upstream gets request.params already percent-decoded from httplib, then joinArguments()
+  // re-encodes them, so the "link=" value must be decoded again here.
+  url = urlDecode(url);
   const proxygroupName = global.clashUseNewFieldName ? "proxy-groups" : "Proxy Group";
   const ruleName = global.clashUseNewFieldName ? "rules" : "Rule";
 
@@ -239,6 +251,9 @@ export async function surgeConfToClashHandler(req: SubRequest): Promise<SubResul
   }
 
   // scan groups first, get potential policy-path
+  // The clash base template emits `proxy-groups:` with nothing under it, which YAML parses as null —
+  // `null ?? []` keeps null and push() would throw, so coerce to a real array first.
+  if (!Array.isArray(clash[proxygroupName])) clash[proxygroupName] = [];
   const section = ini.getItems("Proxy Group");
   const links: string[] = [url];
   for (const [name, content] of section) {
@@ -260,9 +275,11 @@ export async function surgeConfToClashHandler(req: SubRequest): Promise<SubResul
         singlegroup["proxies"] = proxies;
       }
     }
-    const groups = (clash[proxygroupName] as unknown[]) ?? [];
-    groups.push(singlegroup);
-    clash[proxygroupName] = groups;
+    // Assignment is needed because the base template provides no array (YAML null); upstream's
+    // clash[proxygroup_name] is a real YAML node, so this merely mirrors that shape. Note these
+    // entries are replaced again by proxyToClashCore() below — upstream does the same, since it
+    // passes an empty extra_proxy_group and proxyToClash always re-assigns proxy-groups.
+    (clash[proxygroupName] as unknown[]).push(singlegroup);
   }
 
   proxy = parseProxy(global.proxySubscription);
@@ -316,9 +333,8 @@ export async function surgeConfToClashHandler(req: SubRequest): Promise<SubResul
       default:
         continue;
     }
-    const groups = (clash[proxygroupName] as unknown[]) ?? [];
-    groups.push(singlegroup);
-    clash[proxygroupName] = groups;
+    // The base template leaves `proxy-groups:` empty (YAML null), so coerce once before pushing.
+    (clash[proxygroupName] as unknown[]).push(singlegroup);
   }
 
   const ruleItems = ini.getAll("Rule", "{NONAME}");

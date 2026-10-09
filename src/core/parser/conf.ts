@@ -59,7 +59,13 @@ export function explodeSSD(link0: string, nodes: Proxy[]): void {
     else singlenode = (serverNodes[i] as Record<string, unknown>)["__value"];
     const sn = asObject(singlenode);
     if (!sn) continue;
-    server = jsonToString(sn["server"]);
+    {
+      // upstream is `singlenode["server"] >> server;` (yamlcpp_extra.h:8-12): assign only when the
+      // member is defined and non-null, so an entry WITHOUT "server" keeps the previous entry's
+      // value. Every sibling field below already emulates that "keep previous" rule.
+      const s = getMember(sn, "server");
+      if (s) server = s;
+    }
     {
       const r = getMember(sn, "remarks");
       if (r) remarks = r;
@@ -305,7 +311,10 @@ export function explodeVmessConf(content: string, nodes: Proxy[]): void {
     const item = asObject(itemUnknown);
     if (!item) continue;
     const node = newProxy();
-    if (item["address"] === null || item["port"] === null || item["id"] === null) continue;
+    // Upstream skips an entry whose address/port/id is null (subparser.cpp:596-598: `IsNull()`).
+    // In JS a MISSING key is `undefined`, so `=== null` never fired and the entry produced a node
+    // with an empty hostname and port 0. `== null` covers both null and undefined.
+    if (item["address"] == null || item["port"] == null || item["id"] == null) continue;
 
     ps = jsonToString(item["remarks"]);
     add = jsonToString(item["address"]);

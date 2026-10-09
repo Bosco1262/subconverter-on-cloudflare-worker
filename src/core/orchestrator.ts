@@ -2,7 +2,7 @@
 
 import { Proxy, ProxyType } from "./proxy";
 import { newExtraSettings, type extra_settings, type ProxyGroupConfig, type RulesetContent, RULESET_SURGE } from "./extra";
-import { global, fetchFile, refreshRulesets, loadExternalConfig, newExternalConfig, type ExternalConfig } from "./settings";
+import { global, fetchFile, refreshRulesets, loadExternalConfig, newExternalConfig, fromIniRulesetConfs, type ExternalConfig } from "./settings";
 import { addNodes, filterNodes, preprocessNodes } from "./nodemanip";
 import { getSubInfoFromNodes, type RegexMatchConfigs } from "./info";
 import { split, startsWith, toInt, join, strFind, getUrlArg } from "../lib/string";
@@ -382,6 +382,18 @@ export async function subconverter(req: SubRequest): Promise<SubResult> {
     request_header: req.headers,
   };
 
+  // MAX_NODES is this port's own fuse (upstream has no max_allowed_nodes at all — it exists to
+  // protect the free-plan CPU budget). Checking only BEFORE addNodes meant a single subscription
+  // could contribute unlimited nodes, so the limit is now enforced after every fetch as well.
+  const overNodeLimit = (list: Proxy[]): boolean => {
+    if (global.maxAllowedNodes > 0 && list.length > global.maxAllowedNodes) {
+      console.warn("Node limit reached (" + global.maxAllowedNodes + "); truncating node list.");
+      list.length = global.maxAllowedNodes;
+      return true;
+    }
+    return false;
+  };
+
   if (global.insertUrls.length > 0 && global.insertUrls[0] !== "" && argEnableInsert.get()) {
     groupID = -1;
     urls.push(...split(global.insertUrls.join("|"), "|"));
@@ -389,6 +401,7 @@ export async function subconverter(req: SubRequest): Promise<SubResult> {
     for (const x0 of urls) {
       const x = regTrim(x0);
       if (x.length === 0) continue;
+      if (overNodeLimit(insertNodes)) break;
       const r = await addNodes(x, insertNodes, groupID, parseSet);
       if (r === -1) {
         if (global.skipFailedLinks) console.warn("The following link doesn't contain any valid node info: " + x);
@@ -396,6 +409,7 @@ export async function subconverter(req: SubRequest): Promise<SubResult> {
       }
       groupID--;
     }
+    overNodeLimit(insertNodes);
   }
   urls.length = 0;
   urls.push(...split(argUrl, "|"));
@@ -404,7 +418,7 @@ export async function subconverter(req: SubRequest): Promise<SubResult> {
   for (const x0 of urls) {
     const x = regTrim(x0);
     if (x.length === 0) continue;
-    if (global.maxAllowedNodes > 0 && nodes.length > global.maxAllowedNodes) break;
+    if (overNodeLimit(nodes)) break;
     const r = await addNodes(x, nodes, groupID, parseSet);
     if (r === -1) {
       if (global.skipFailedLinks) console.warn("The following link doesn't contain any valid node info: " + x);
@@ -412,6 +426,7 @@ export async function subconverter(req: SubRequest): Promise<SubResult> {
     }
     groupID++;
   }
+  overNodeLimit(nodes);
   if (nodes.length === 0 && insertNodes.length === 0) {
     return { status: 400, body: "No nodes were found!", headers: [] };
   }
@@ -525,25 +540,34 @@ export async function subconverter(req: SubRequest): Promise<SubResult> {
     }
     case "ss":
       outputContent = proxyToSingle(nodes, 1, ext);
+      // upstream uploads these single-format targets too (interfaces.cpp:795-831); the port only did
+      // so for the config-style targets, so ?upload=true silently did nothing here.
+      if (argUpload.get()) await uploadGist("ss", argUploadPath, outputContent, false);
       break;
     case "ssr":
       outputContent = proxyToSingle(nodes, 2, ext);
+      if (argUpload.get()) await uploadGist("ssr", argUploadPath, outputContent, false);
       break;
     case "v2ray":
       outputContent = proxyToSingle(nodes, 4, ext);
+      if (argUpload.get()) await uploadGist("v2ray", argUploadPath, outputContent, false);
       break;
     case "trojan":
       outputContent = proxyToSingle(nodes, 8, ext);
+      if (argUpload.get()) await uploadGist("trojan", argUploadPath, outputContent, false);
       break;
     case "vless":
       // NOTE: upstream passes 16 here, which via GETBIT 1-based maps to hysteria2 flag — bug-compatible port
       outputContent = proxyToSingle(nodes, 16, ext);
+      if (argUpload.get()) await uploadGist("vless", argUploadPath, outputContent, false);
       break;
     case "hysteria2":
       outputContent = proxyToSingle(nodes, 32, ext);
+      if (argUpload.get()) await uploadGist("hysteria2", argUploadPath, outputContent, false);
       break;
     case "mixed":
       outputContent = proxyToSingle(nodes, 63, ext);
+      if (argUpload.get()) await uploadGist("sub", argUploadPath, outputContent, false);
       break;
     case "quan": {
       let baseContent = "";
@@ -673,18 +697,7 @@ function fromIniProxyGroups(lines: string[]): ProxyGroupConfig[] {
 }
 
 function fromIniRulesets(lines: string[]): [string, string, string, number][] {
-  const out: [string, string, string, number][] = [];
-  for (const line of lines) {
-    if (line.length === 0) continue;
-    const parts = split(line, ",");
-    if (parts.length < 3) continue;
-    const group = parts[0].trim();
-    const ruleset = parts[1].trim();
-    const type = parts[2].trim();
-    const interval = parts.length > 3 ? toInt(parts[3].trim(), 0) : 0;
-    out.push([group, ruleset, type, interval]);
-  }
-  return out;
+  return fromIniRulesetConfs(lines).map(([group, ruleset, interval]) => [group, ruleset, "", interval]);
 }
 
 function fromIniRename(lines: string[]): RegexMatchConfigs {
